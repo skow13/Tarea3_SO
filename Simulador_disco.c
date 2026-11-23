@@ -323,3 +323,100 @@ static int crear_archivo(long size_bytes, char *motivo, size_t mlen)
     imprimir_ubicacion(f, "           ");
     return 1;
 }
+
+static void eliminar_archivo(Archivo *f)
+{
+    printf("[t=%3lds] ELIMINAR archivo #%d  tamano=%ld KB  se liberan %d bloques\n",
+           tiempo, f->id, (f->size_bytes + 1023) / 1024, f->n_data + f->n_index);
+    imprimir_ubicacion(f, "           ");
+
+    for (int i = 0; i < f->n_data; i++) {
+        dueno[f->data[i]] = -1;
+        sig[f->data[i]] = -1;
+    }
+    for (int i = 0; i < f->n_index; i++)
+        dueno[f->index[i]] = -1;
+
+    libres += f->n_data + f->n_index;
+    free(f->data);
+    free(f->index);
+    f->data = NULL;
+    f->index = NULL;
+    f->activo = 0;
+    n_activos--;
+    eliminados++;
+}
+
+static Archivo *archivo_aleatorio(void)
+{
+    long k;
+
+    if (n_activos == 0)
+        return NULL;
+    k = rand_rango(0, n_activos - 1);
+    for (int i = 0; i < n_archivos; i++) {
+        if (archivos[i].activo) {
+            if (k == 0)
+                return &archivos[i];
+            k--;
+        }
+    }
+    return NULL;
+}
+
+static void acceder_archivo(void)
+{
+    Archivo *f = archivo_aleatorio();
+    long util, k, accesos = 0, fisico = -1;
+    long pos;
+
+    if (!f) {
+        printf("[t=%3lds] ACCESO   no hay archivos para acceder\n", tiempo);
+        return;
+    }
+
+    pos  = rand_rango(0, f->size_bytes - 1);
+    util = (metodo == ENLAZADA) ? bloque_bytes - PTR_SIZE : bloque_bytes;
+    k    = pos / util;     
+
+    printf("[t=%3lds] ACCESO   archivo #%d  posicion logica=byte %ld (%.2f KB) "
+           "-> bloque logico %ld\n",
+           tiempo, f->id, pos, pos / 1024.0, k);
+
+    switch (metodo) {
+    case CONTIGUA:
+        fisico = f->first + k;
+        accesos = 1;
+        printf("           contigua: direccion directa = inicio (%d) + %ld\n",
+               f->first, k);
+        break;
+    case ENLAZADA: {
+        long b = f->first;
+        accesos = 1;                     
+        for (long i = 0; i < k; i++) {
+            b = sig[b];                    
+            accesos++;
+        }
+        fisico = b;
+        printf("           enlazada: se recorre la cadena desde el bloque %d\n",
+               f->first);
+        break;
+    }
+    default: {                             
+        long e = entradas_por_indice();
+        long j = k / (e - 1);              
+        if (j > f->n_index - 1)
+            j = f->n_index - 1;
+        fisico = f->data[k];
+        accesos = (j + 1) + 1;             
+        printf("           indexada: puntero en el bloque indice %d "
+               "(%ld lectura(s) de indice)\n", f->index[j], j + 1);
+        break;
+    }
+    }
+
+    printf("           ubicacion fisica = bloque %ld | accesos a disco necesarios = %ld\n",
+           fisico, accesos);
+    n_accesos_consulta++;
+    suma_accesos += accesos;
+}
