@@ -420,3 +420,120 @@ static void acceder_archivo(void)
     n_accesos_consulta++;
     suma_accesos += accesos;
 }
+
+static void imprimir_estado(void)
+{
+    long huecos, mayor;
+    long usados = total_bloques - libres;
+
+    calc_huecos(&huecos, &mayor);
+    printf("[t=%3lds] ESTADO   uso=%.2f%% (%ld/%ld bloques) | libres=%ld | huecos=%ld "
+           "| mayor hueco=%ld | frag. externa=%.2f%%\n",
+           tiempo, 100.0 * usados / total_bloques, usados, total_bloques,
+           libres, huecos, mayor, pct_fragmentacion(mayor));
+}
+
+static void imprimir_estadisticas(const char *motivo)
+{
+    long huecos, mayor, usados = total_bloques - libres;
+
+    calc_huecos(&huecos, &mayor);
+
+    printf("\nEstadisticas finales:\n");
+    printf("Motivo de termino        : %s\n", motivo);
+    printf("\nUtilizacion del disco:\n");
+    printf("Bloques usados           : %ld de %ld (%.2f%%)\n",
+           usados, total_bloques, 100.0 * usados / total_bloques);
+    printf("Bloques libres           : %ld (%.2f%%)\n",
+           libres, 100.0 * libres / total_bloques);
+    printf("\nArchivos:\n");
+    printf("Creados                  : %ld\n", creados);
+    printf("Eliminados               : %ld\n", eliminados);
+    printf("Activos al terminar      : %d\n", n_activos);
+    printf("\nFragmentacion externa:\n");
+    printf("Final                    : %.2f%% (huecos=%ld, mayor hueco=%ld bloques)\n",
+           pct_fragmentacion(mayor), huecos, mayor);
+    printf("Maxima registrada        : %.2f%%\n", frag_max);
+    printf("Promedio registrado      : %.2f%%\n",
+           frag_muestras ? frag_suma / frag_muestras : 0.0);
+    printf("\nAccesos:\n");
+    printf("Accesos simulados        : %ld\n", n_accesos_consulta);
+    if (n_accesos_consulta)
+        printf("Promedio de accesos por localizacion de bloque: %.2f\n",
+               (double)suma_accesos / n_accesos_consulta);
+    else
+        printf("Promedio de accesos por localizacion de bloque: sin datos\n");
+}
+int main(void)
+{
+    char motivo[256] = "";
+
+    printf("Simulador de asignacion de archivos en disco\n");
+    disco_mb = leer_long("Tamano del disco (MB): ", 1, 4096);
+    bloque_kb = leer_long("Tamano de cada bloque (KB): ", 1,
+                          (disco_mb * 1024 / 8) < 1024 ? disco_mb * 1024 / 8 : 1024);
+    metodo = leer_metodo();
+    min_kb = leer_long("Tamano minimo de archivo (KB): ", 1, disco_mb * 1024);
+    max_kb = leer_long("Tamano maximo de archivo (KB): ", min_kb, disco_mb * 1024);
+
+    bloque_bytes = bloque_kb * 1024;
+    total_bloques = disco_mb * 1024 / bloque_kb;
+    libres = total_bloques;
+
+    dueno = malloc((size_t)total_bloques * sizeof(int));
+    sig   = malloc((size_t)total_bloques * sizeof(int));
+    if (!dueno || !sig) {
+        perror("malloc");
+        return 1;
+    }
+    for (long i = 0; i < total_bloques; i++) {
+        dueno[i] = -1;
+        sig[i] = -1;
+    }
+
+    srandom((unsigned)time(NULL));
+
+    printf("\nDisco: %ld bloques de %ld KB | mecanismo: %s | archivos de %ld a %ld KB\n",
+           total_bloques, bloque_kb, nombre_metodo(), min_kb, max_kb);
+    printf("Creacion cada %d s; desde los %d s: acceso y eliminacion cada %d s.\n\n",
+           PERIODO_CREAR, INICIO_EVENTOS, PERIODO_EVENTOS);
+
+    for (tiempo = 0; ; tiempo++) {
+        if (tiempo % PERIODO_CREAR == 0) {
+            long size_kb = rand_rango(min_kb, max_kb);
+            long size_bytes = size_kb * 1024;
+
+            if (!crear_archivo(size_bytes, motivo, sizeof motivo)) {
+                printf("[t=%3lds] CREAR    archivo de %ld KB: no se pudo asignar\n",
+                       tiempo, size_kb);
+                break;
+            }
+        }
+
+        if (tiempo >= INICIO_EVENTOS &&
+            (tiempo - INICIO_EVENTOS) % PERIODO_EVENTOS == 0) {
+            Archivo *f;
+
+            acceder_archivo();
+            f = archivo_aleatorio();
+            if (f)
+                eliminar_archivo(f);
+            imprimir_estado();
+        }
+
+        muestrear_fragmentacion();
+
+        sleep(1);
+    }
+
+    imprimir_estadisticas(motivo);
+
+    for (int i = 0; i < n_archivos; i++) {
+        free(archivos[i].data);
+        free(archivos[i].index);
+    }
+    free(archivos);
+    free(dueno);
+    free(sig);
+    return 0;
+}
